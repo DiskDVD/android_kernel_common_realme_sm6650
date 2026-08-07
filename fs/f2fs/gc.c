@@ -1368,8 +1368,9 @@ static int move_data_block(struct inode *inode, block_t bidx,
 	set_summary(&sum, dn.nid, dn.ofs_in_node, ni.version);
 
 	/* allocate block address */
+
 	err = f2fs_allocate_data_block(fio.sbi, NULL, fio.old_blkaddr, &newaddr,
-				&sum, type, NULL);
+				&sum, type, NULL, 0);
 	if (err) {
 		f2fs_put_page(mpage, 1);
 		/* filesystem should shutdown, no need to recovery block */

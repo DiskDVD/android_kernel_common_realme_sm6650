@@ -58,6 +58,10 @@
 
 #include <trace/hooks/sched.h>
 
+#if IS_ENABLED(CONFIG_OPLUS_SCHED_TUNE)
+#include <../kernel/oplus_cpu/sched/sched_tune/tune.h>
+#endif
+
 EXPORT_TRACEPOINT_SYMBOL_GPL(sched_stat_runtime);
 
 /*
@@ -3329,6 +3333,8 @@ static void reweight_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
 
 	update_load_set(&se->load, weight);
 
+	trace_android_vh_reweight_entity(se);
+
 #ifdef CONFIG_SMP
 	do {
 		u32 divider = get_pelt_divider(&se->avg);
@@ -6166,6 +6172,10 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	 */
 	util_est_enqueue(&rq->cfs, p);
 
+#if IS_ENABLED(CONFIG_OPLUS_SCHED_TUNE)
+	schedtune_enqueue_task(p, cpu_of(rq));
+#endif
+
 	/*
 	 * If in_iowait is set, the code below may not trigger any cpufreq
 	 * utilization updates, so do it here explicitly with the IOWAIT flag
@@ -6256,6 +6266,10 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	bool was_sched_idle = sched_idle_rq(rq);
 
 	util_est_dequeue(&rq->cfs, p);
+
+#if IS_ENABLED(CONFIG_OPLUS_SCHED_TUNE)
+	schedtune_dequeue_task(p, cpu_of(rq));
+#endif
 
 	for_each_sched_entity(se) {
 		cfs_rq = cfs_rq_of(se);
