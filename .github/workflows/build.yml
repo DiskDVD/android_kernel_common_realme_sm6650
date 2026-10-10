@@ -73,8 +73,6 @@ jobs:
                       continue
 
                   target = match.group(2)
-
-                  # Disable only absent Oplus Kconfig references.
                   if "oplus" not in target.lower():
                       continue
                   if os.path.exists(target):
@@ -97,12 +95,69 @@ jobs:
               print("Disabled absent Oplus Kconfig references:")
               for entry in missing:
                   print(f"  {entry}")
-              print(
-                  "Continuing with an analysis build without "
-                  "those missing vendor components."
-              )
+              print("Continuing with an analysis build without those missing vendor components.")
           else:
               print("No missing Oplus source Kconfig references found.")
+          PY
+
+      - name: Disable unavailable Oplus locking integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          # In this checkout the header may be a dangling symlink into the
+          # absent vendor/oplus tree. Disable its include only if unresolved.
+          header = Path("kernel/locking/locking_main.h")
+          core = Path("kernel/sched/core.c")
+          include_line = '#include "../locking/locking_main.h"'
+
+          if not header.exists():
+              if not core.is_file():
+                  raise SystemExit("kernel/sched/core.c is missing")
+              text = core.read_text(encoding="utf-8")
+              if include_line in text:
+                  core.write_text(
+                      text.replace(
+                          include_line,
+                          "/* Disabled for analysis build: missing Oplus locking header */",
+                      ),
+                      encoding="utf-8",
+                  )
+                  print("Disabled include of missing kernel/locking/locking_main.h")
+              else:
+                  print("No locking_main.h include found in kernel/sched/core.c")
+          else:
+              print("Oplus locking header is present; keeping its include")
+
+          # The source file is absent from this checkout, while Makefile
+          # unconditionally requests oplus_locking.o. Drop only that object.
+          source = Path("kernel/locking/oplus_locking.c")
+          makefile = Path("kernel/locking/Makefile")
+          if not source.is_file():
+              lines = makefile.read_text(encoding="utf-8").splitlines(keepends=True)
+              new_lines = []
+              removed = False
+              for line in lines:
+                  if re.match(r"^\s*obj-[^\s]+\s*\+=", line):
+                      updated = re.sub(r"(?<!\S)oplus_locking\.o(?=\s|$)", "", line)
+                      if updated != line:
+                          removed = True
+                          updated = re.sub(r"[ \t]+(?=\n$)", "", updated)
+                          if re.match(r"^\s*obj-[^\s]+\s*\+=\s*(?:#.*)?\n?$", updated):
+                              continue
+                          line = updated
+                  new_lines.append(line)
+
+              if removed:
+                  makefile.write_text("".join(new_lines), encoding="utf-8")
+                  print("Removed unavailable oplus_locking.o from kernel/locking/Makefile")
+              else:
+                  print("No oplus_locking.o Makefile entry needed removal")
+          else:
+              print("kernel/locking/oplus_locking.c is present; keeping its build entry")
           PY
 
       - name: Configure kernel
@@ -119,7 +174,6 @@ jobs:
             -e DEBUG_INFO \
             -e DEBUG_INFO_DWARF4 \
             -d DEBUG_INFO_DWARF5
-
           make O=out ARCH=arm64 LLVM=1 olddefconfig
 
       - name: Build vmlinux
