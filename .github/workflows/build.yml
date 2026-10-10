@@ -1,3 +1,4 @@
+```yaml
 name: Build vmlinux
 
 on:
@@ -12,11 +13,12 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout kernel
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
           repository: DiskDVD/android_kernel_common_realme_sm6650
           ref: main
+          fetch-depth: 1
 
       - name: Install dependencies
         run: |
@@ -28,9 +30,31 @@ jobs:
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
             cpio rsync
 
-      - name: Configure
+      - name: Check and fix missing Kconfig reference
+        shell: bash
         run: |
-          make O=out ARCH=arm64 gki_defconfig
+          set -e
+          if [ ! -f kernel/oplus_cpu/sched/Kconfig ]; then
+            echo "::warning::Missing Oplus scheduler Kconfig; disabling its source reference for analysis build"
+            sed -i '\|^[[:space:]]*source "kernel/oplus_cpu/sched/Kconfig"[[:space:]]*$|d' init/Kconfig
+          fi
+
+          if grep -q 'kernel/oplus_cpu/sched/Kconfig' init/Kconfig &&
+             [ ! -f kernel/oplus_cpu/sched/Kconfig ]; then
+            echo "::error::Could not remove missing Kconfig reference"
+            exit 1
+          fi
+
+      - name: Configure kernel
+        run: |
+          make O=out ARCH=arm64 LLVM=1 gki_defconfig
+
+      - name: Enable debug symbols
+        run: |
+          scripts/config --file out/.config \
+            -e DEBUG_INFO \
+            -e DEBUG_INFO_DWARF5 || true
+          make O=out ARCH=arm64 LLVM=1 olddefconfig
 
       - name: Build vmlinux
         run: |
@@ -41,19 +65,20 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             vmlinux
 
-      - name: Upload vmlinux
+      - name: Verify output
+        run: |
+          test -s out/vmlinux
+          file out/vmlinux
+          ls -lh out/vmlinux
+
+      - name: Upload analysis files
         uses: actions/upload-artifact@v4
         with:
-          name: vmlinux-main-arm64
-          path: out/vmlinux
+          name: vmlinux-main-analysis
+          path: |
+            out/vmlinux
+            out/.config
+            out/System.map
           if-no-files-found: error
           retention-days: 14
-
-      - name: Upload config
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-config
-          path: out/.config
-          if-no-files-found: ignore
-          retention-days: 14
+```
