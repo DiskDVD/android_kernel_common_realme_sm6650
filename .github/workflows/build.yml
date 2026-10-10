@@ -15,11 +15,26 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout kernel
+      # The kernel tree contains symlinks such as kernel/oplus_cpu and
+      # kernel/locking/oplus_locking.c that resolve into ../../../../vendor.
+      # Put the kernel under kernel/common and the vendor tree at workspace
+      # root to match the upstream Android source-tree layout.
+      - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
+          repository: DiskDVD/android_kernel_common_realme_sm6650
           ref: main
+          path: kernel/common
           fetch-depth: 1
+
+      - name: Checkout Realme/Oplus vendor sources
+        uses: actions/checkout@v4
+        with:
+          repository: realme-kernel-opensource/android_kernel_modules_and_devicetree_realme_sm6650
+          ref: realme/sm6650_b_16.0
+          fetch-depth: 1
+          # Preserve the nested kernel checkout while creating the root checkout.
+          clean: false
 
       - name: Free runner disk space
         shell: bash
@@ -39,7 +54,25 @@ jobs:
             libelf-dev libncurses-dev libssl-dev zlib1g-dev \
             liblz4-tool libzstd-dev
 
-      - name: Disable dangling optional Oplus Kconfig references
+      - name: Verify kernel and vendor source layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s vendor/oplus/kernel/synchronize/oplus_locking.c
+          test -s vendor/oplus/kernel/synchronize/oplus_locking.h
+          test -s vendor/oplus/kernel/cpu/sched/Kconfig
+          test -s vendor/oplus/kernel/cpu/sched/sched_assist/sa_common_struct.h
+          test -s vendor/oplus/kernel/oplus_performance_5.10/oplus_resctrl/Kconfig
+          test -s vendor/oplus/kernel/storage/Kconfig
+          test -s kernel/common/kernel/locking/locking_main.h
+          test -s kernel/common/kernel/locking/oplus_locking.c
+          test -s kernel/common/kernel/oplus_cpu/sched/Kconfig
+          test -s kernel/common/drivers/soc/oplus/oplus_resctrl/Kconfig
+          test -s kernel/common/drivers/soc/oplus/storage/Kconfig
+          echo "Kernel and vendor symlinks resolve correctly."
+
+      - name: Disable only genuinely missing optional Oplus Kconfig references
+        working-directory: kernel/common
         shell: bash
         run: |
           set -euo pipefail
@@ -92,81 +125,23 @@ jobs:
                       f.writelines(lines)
 
           if missing:
-              print("Disabled absent Oplus Kconfig references:")
+              print("Disabled missing optional Oplus Kconfig references:")
               for entry in missing:
                   print(f"  {entry}")
-              print("Continuing with an analysis build without those missing vendor components.")
+              print("These components are absent from the checked-out source trees.")
           else:
-              print("No missing Oplus source Kconfig references found.")
-          PY
-
-      - name: Disable unavailable Oplus locking integration
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import re
-          from pathlib import Path
-
-          # In this checkout the header may be a dangling symlink into the
-          # absent vendor/oplus tree. Disable its include only if unresolved.
-          header = Path("kernel/locking/locking_main.h")
-          core = Path("kernel/sched/core.c")
-          include_line = '#include "../locking/locking_main.h"'
-
-          if not header.exists():
-              if not core.is_file():
-                  raise SystemExit("kernel/sched/core.c is missing")
-              text = core.read_text(encoding="utf-8")
-              if include_line in text:
-                  core.write_text(
-                      text.replace(
-                          include_line,
-                          "/* Disabled for analysis build: missing Oplus locking header */",
-                      ),
-                      encoding="utf-8",
-                  )
-                  print("Disabled include of missing kernel/locking/locking_main.h")
-              else:
-                  print("No locking_main.h include found in kernel/sched/core.c")
-          else:
-              print("Oplus locking header is present; keeping its include")
-
-          # The source file is absent from this checkout, while Makefile
-          # unconditionally requests oplus_locking.o. Drop only that object.
-          source = Path("kernel/locking/oplus_locking.c")
-          makefile = Path("kernel/locking/Makefile")
-          if not source.is_file():
-              lines = makefile.read_text(encoding="utf-8").splitlines(keepends=True)
-              new_lines = []
-              removed = False
-              for line in lines:
-                  if re.match(r"^\s*obj-[^\s]+\s*\+=", line):
-                      updated = re.sub(r"(?<!\S)oplus_locking\.o(?=\s|$)", "", line)
-                      if updated != line:
-                          removed = True
-                          updated = re.sub(r"[ \t]+(?=\n$)", "", updated)
-                          if re.match(r"^\s*obj-[^\s]+\s*\+=\s*(?:#.*)?\n?$", updated):
-                              continue
-                          line = updated
-                  new_lines.append(line)
-
-              if removed:
-                  makefile.write_text("".join(new_lines), encoding="utf-8")
-                  print("Removed unavailable oplus_locking.o from kernel/locking/Makefile")
-              else:
-                  print("No oplus_locking.o Makefile entry needed removal")
-          else:
-              print("kernel/locking/oplus_locking.c is present; keeping its build entry")
+              print("All direct Oplus Kconfig references found in tracked Kconfig files resolve.")
           PY
 
       - name: Configure kernel
+        working-directory: kernel/common
         shell: bash
         run: |
           set -euo pipefail
           make O=out ARCH=arm64 LLVM=1 gki_defconfig
 
       - name: Enable debug information
+        working-directory: kernel/common
         shell: bash
         run: |
           set -euo pipefail
@@ -177,6 +152,7 @@ jobs:
           make O=out ARCH=arm64 LLVM=1 olddefconfig
 
       - name: Build vmlinux
+        working-directory: kernel/common
         shell: bash
         run: |
           set -euo pipefail
@@ -184,6 +160,7 @@ jobs:
           test -s out/vmlinux
 
       - name: Verify output
+        working-directory: kernel/common
         shell: bash
         run: |
           set -euo pipefail
@@ -196,9 +173,9 @@ jobs:
         with:
           name: vmlinux-main-analysis
           path: |
-            out/vmlinux
-            out/.config
-            out/System.map
+            kernel/common/out/vmlinux
+            kernel/common/out/.config
+            kernel/common/out/System.map
           if-no-files-found: error
           retention-days: 14
 
@@ -208,7 +185,7 @@ jobs:
         with:
           name: vmlinux-build-debug
           path: |
-            out/.config
-            out/include/config/auto.conf
+            kernel/common/out/.config
+            kernel/common/out/include/config/auto.conf
           if-no-files-found: ignore
           retention-days: 7
