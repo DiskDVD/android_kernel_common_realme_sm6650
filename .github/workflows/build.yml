@@ -6,17 +6,43 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Build Kernel
-        uses: xiaoleGun/KernelSU_Action@main
         with:
-          kernel_url: https://github.com/DiskDVD/android_kernel_common_realme_sm6650
-          kernel_branch: main
-          config: gki_defconfig
-          arch: arm64
-          clang_version: r487747c
-          ksu: false
-          release: true
+          repository: DiskDVD/android_kernel_common_realme_sm6650
+          ref: main
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl wget tar gzip python3 flex bison libssl-dev bc cpio kmod rsync zip unzip
+
+      - name: Download AOSP Clang
+        run: |
+          mkdir -p ${{ github.workspace }}/clang
+          cd ${{ github.workspace }}/clang
+          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747c.tar.gz -O clang.tar.gz
+          tar -xzf clang.tar.gz
+          rm clang.tar.gz
+          echo "${{ github.workspace }}/clang/bin" >> $GITHUB_PATH
+
+      - name: Build kernel
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export PATH=${{ github.workspace }}/clang/bin:$PATH
+
+          make O=out gki_defconfig
+          make O=out -j$(nproc)
+
+      - name: Upload vmlinux
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmlinux
+          path: out/vmlinux
+          if-no-files-found: warn
