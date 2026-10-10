@@ -4,24 +4,30 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          repository: DiskDVD/android_kernel_common_realme_sm6650
+          ref: main
+          path: kernel/source
+
       - name: Build kernel
         uses: dabao1955/kernel_build_action@main
         with:
-          kernel-url: https://github.com/DiskDVD/android_kernel_common_realme_sm6650
-          kernel-branch: main
+          kernel-url: ./kernel/source/
           config: gki_defconfig
           arch: arm64
           aosp-gcc: true
-          aosp-clang: false
-          other-clang-url: https://github.com/kdrag0n/proton-clang
-          other-clang-branch: master
+          aosp-clang: true
+          aosp-clang-version: r383902
           disable-lto: true
+          ksu: false
           anykernel3: false
-          release: true
-          access-token: ${{ secrets.GITHUB_TOKEN }}
+          release: false
