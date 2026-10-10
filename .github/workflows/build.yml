@@ -1,7 +1,9 @@
-```yaml
 name: Build vmlinux
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -13,65 +15,63 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout main
+      - name: Checkout kernel
         uses: actions/checkout@v4
         with:
-          repository: DiskDVD/android_kernel_common_realme_sm6650
-          ref: main
           fetch-depth: 1
 
-      - name: Install dependencies
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          df -h /
+
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            bc bison build-essential flex \
-            libssl-dev libelf-dev libncurses-dev \
-            dwarves python3 git clang llvm lld \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
-            cpio rsync
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential flex gawk git make pahole python3 rsync \
+            cpio file clang llvm lld \
+            libelf-dev libncurses-dev libssl-dev zlib1g-dev liblz4-tool libzstd-dev
 
-      - name: Check and fix missing Kconfig reference
+      - name: Handle missing Oplus scheduler source
         shell: bash
         run: |
-          set -e
-          if [ ! -f kernel/oplus_cpu/sched/Kconfig ]; then
-            echo "::warning::Missing Oplus scheduler Kconfig; disabling its source reference for analysis build"
-            sed -i '\|^[[:space:]]*source "kernel/oplus_cpu/sched/Kconfig"[[:space:]]*$|d' init/Kconfig
+          set -euo pipefail
+          if [[ ! -f kernel/oplus_cpu/sched/Kconfig ]]; then
+            echo "::warning::kernel/oplus_cpu is a dangling symlink to missing vendor/oplus/kernel/cpu; building analysis vmlinux without the Oplus scheduler component."
+            sed -i '/^[[:space:]]*source[[:space:]]*"kernel\/oplus_cpu\/sched\/Kconfig"[[:space:]]*$/d' init/Kconfig
           fi
-
-          if grep -q 'kernel/oplus_cpu/sched/Kconfig' init/Kconfig &&
-             [ ! -f kernel/oplus_cpu/sched/Kconfig ]; then
-            echo "::error::Could not remove missing Kconfig reference"
+          if grep -Eq '^[[:space:]]*source[[:space:]]*"kernel/oplus_cpu/sched/Kconfig"[[:space:]]*$' init/Kconfig; then
+            echo "::error::Missing Oplus Kconfig reference is still present in init/Kconfig"
             exit 1
           fi
+          test -f init/Kconfig
 
       - name: Configure kernel
-        run: |
-          make O=out ARCH=arm64 LLVM=1 gki_defconfig
+        run: make O=out ARCH=arm64 LLVM=1 gki_defconfig
 
       - name: Enable debug symbols
+        shell: bash
         run: |
+          set -euo pipefail
           scripts/config --file out/.config \
+            -d OPLUS_SCHED_TUNE \
             -e DEBUG_INFO \
-            -e DEBUG_INFO_DWARF5 || true
+            -e DEBUG_INFO_DWARF4 \
+            -d DEBUG_INFO_DWARF5
           make O=out ARCH=arm64 LLVM=1 olddefconfig
 
       - name: Build vmlinux
-        run: |
-          make O=out -j"$(nproc)" \
-            ARCH=arm64 \
-            LLVM=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            vmlinux
+        run: make O=out ARCH=arm64 LLVM=1 -j"$(nproc)" vmlinux
 
       - name: Verify output
         run: |
+          set -euo pipefail
           test -s out/vmlinux
           file out/vmlinux
-          ls -lh out/vmlinux
+          ls -lh out/vmlinux out/.config out/System.map
 
-      - name: Upload analysis files
+      - name: Upload vmlinux and config
         uses: actions/upload-artifact@v4
         with:
           name: vmlinux-main-analysis
@@ -81,4 +81,3 @@ jobs:
             out/System.map
           if-no-files-found: error
           retention-days: 14
-```
