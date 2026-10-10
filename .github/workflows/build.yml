@@ -1,4 +1,5 @@
-name: Build Kernel
+```yaml
+name: Build vmlinux
 
 on:
   workflow_dispatch:
@@ -8,7 +9,9 @@ permissions:
 
 jobs:
   build:
+    name: Build ARM64 kernel
     runs-on: ubuntu-22.04
+    timeout-minutes: 360
 
     steps:
       - name: Checkout kernel source
@@ -16,18 +19,61 @@ jobs:
         with:
           repository: DiskDVD/android_kernel_common_realme_sm6650
           ref: main
-          path: kernel/source
+          fetch-depth: 1
 
-      - name: Build kernel
-        uses: dabao1955/kernel_build_action@main
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential flex \
+            libssl-dev libelf-dev libncurses-dev \
+            dwarves python3 git clang llvm lld \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            cpio rsync pahole
+
+      - name: Configure kernel
+        env:
+          ARCH: arm64
+        run: |
+          make O=out gki_defconfig
+          scripts/config --file out/.config \
+            -e DEBUG_INFO \
+            -e DEBUG_INFO_DWARF5 || true
+          make O=out olddefconfig
+
+      - name: Build vmlinux
+        env:
+          ARCH: arm64
+          LLVM: "1"
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        run: |
+          make O=out -j"$(nproc)" \
+            ARCH=arm64 \
+            LLVM=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            vmlinux
+
+      - name: Verify vmlinux
+        run: |
+          test -s out/vmlinux
+          file out/vmlinux
+          ls -lh out/vmlinux
+
+      - name: Upload vmlinux
+        uses: actions/upload-artifact@v4
         with:
-          kernel-url: ./kernel/source/
-          config: gki_defconfig
-          arch: arm64
-          aosp-gcc: true
-          aosp-clang: true
-          aosp-clang-version: r383902
-          disable-lto: true
-          ksu: false
-          anykernel3: false
-          release: false
+          name: vmlinux-main-arm64
+          path: out/vmlinux
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload kernel config
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-config
+          path: out/.config
+          if-no-files-found: error
+          retention-days: 14
+```
