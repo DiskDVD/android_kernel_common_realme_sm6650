@@ -7,23 +7,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout kernel source
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          repository: DiskDVD/android_kernel_common_realme_sm6650
-          ref: main
 
-      - name: Build kernel with dabao1955 action
-        uses: dabao1955/kernel_build_action@main
+      - name: Build Kernel
+        uses: xiaoleGun/KernelSU_Action@main
         with:
-          kernel-url: https://github.com/DiskDVD/android_kernel_common_realme_sm6650
-          kernel-branch: main
+          kernel_url: https://github.com/DiskDVD/android_kernel_common_realme_sm6650
+          kernel_branch: main
           config: gki_defconfig
           arch: arm64
-          aosp-gcc: true
-          aosp-clang: true
+          clang_version: r487747c
           ksu: false
-          ksu-version: main
-          disable-lto: true
-          anykernel3: false
           release: true
