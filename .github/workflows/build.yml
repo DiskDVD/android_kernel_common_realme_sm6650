@@ -1,9 +1,6 @@
 name: Build vmlinux
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -15,38 +12,19 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      # The kernel tree contains symlinks such as kernel/oplus_cpu and
-      # kernel/locking/oplus_locking.c that resolve into ../../../../vendor.
-      # Put the kernel under kernel/common and the vendor tree at workspace
-      # root to match the upstream Android source-tree layout.
-      - name: Checkout kernel source
+      - name: Checkout kernel
         uses: actions/checkout@v4
         with:
-          repository: DiskDVD/android_kernel_common_realme_sm6650
           ref: main
-          path: kernel/common
           fetch-depth: 1
 
-      - name: Checkout Realme/Oplus vendor sources
-        uses: actions/checkout@v4
-        with:
-          repository: realme-kernel-opensource/android_kernel_modules_and_devicetree_realme_sm6650
-          ref: realme/sm6650_b_16.0
-          fetch-depth: 1
-          # Preserve the nested kernel checkout while creating the root checkout.
-          clean: false
-
-      - name: Free runner disk space
-        shell: bash
+      - name: Free disk space
         run: |
-          set -euo pipefail
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
           df -h /
 
-      - name: Install build dependencies
-        shell: bash
+      - name: Install dependencies
         run: |
-          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             bc bison build-essential flex gawk git make pahole python3 rsync \
@@ -54,97 +32,12 @@ jobs:
             libelf-dev libncurses-dev libssl-dev zlib1g-dev \
             liblz4-tool libzstd-dev
 
-      - name: Verify kernel and vendor source layout
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -s vendor/oplus/kernel/synchronize/oplus_locking.c
-          test -s vendor/oplus/kernel/synchronize/oplus_locking.h
-          test -s vendor/oplus/kernel/cpu/sched/Kconfig
-          test -s vendor/oplus/kernel/cpu/sched/sched_assist/sa_common_struct.h
-          test -s vendor/oplus/kernel/oplus_performance_5.10/oplus_resctrl/Kconfig
-          test -s vendor/oplus/kernel/storage/Kconfig
-          test -s kernel/common/kernel/locking/locking_main.h
-          test -s kernel/common/kernel/locking/oplus_locking.c
-          test -s kernel/common/kernel/oplus_cpu/sched/Kconfig
-          test -s kernel/common/drivers/soc/oplus/oplus_resctrl/Kconfig
-          test -s kernel/common/drivers/soc/oplus/storage/Kconfig
-          echo "Kernel and vendor symlinks resolve correctly."
-
-      - name: Disable only genuinely missing optional Oplus Kconfig references
-        working-directory: kernel/common
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os
-          import re
-          import subprocess
-
-          tracked = subprocess.check_output(
-              ["git", "ls-files", "-z"]
-          ).decode().split("\0")
-
-          source_re = re.compile(
-              r'^(\s*)source\s+"([^"$]+)"\s*(?:#.*)?$'
-          )
-          missing = []
-
-          for name in tracked:
-              if not name or os.path.basename(name) != "Kconfig":
-                  continue
-              if not os.path.isfile(name):
-                  continue
-
-              with open(name, "r", encoding="utf-8") as f:
-                  lines = f.readlines()
-
-              changed = False
-              for index, line in enumerate(lines):
-                  match = source_re.match(line.rstrip("\n"))
-                  if not match:
-                      continue
-
-                  target = match.group(2)
-                  if "oplus" not in target.lower():
-                      continue
-                  if os.path.exists(target):
-                      continue
-
-                  missing.append(f"{name}:{index + 1} -> {target}")
-                  lines[index] = (
-                      match.group(1)
-                      + "# Disabled for analysis build: missing optional Oplus Kconfig: "
-                      + target
-                      + "\n"
-                  )
-                  changed = True
-
-              if changed:
-                  with open(name, "w", encoding="utf-8") as f:
-                      f.writelines(lines)
-
-          if missing:
-              print("Disabled missing optional Oplus Kconfig references:")
-              for entry in missing:
-                  print(f"  {entry}")
-              print("These components are absent from the checked-out source trees.")
-          else:
-              print("All direct Oplus Kconfig references found in tracked Kconfig files resolve.")
-          PY
-
       - name: Configure kernel
-        working-directory: kernel/common
-        shell: bash
         run: |
-          set -euo pipefail
           make O=out ARCH=arm64 LLVM=1 gki_defconfig
 
-      - name: Enable debug information
-        working-directory: kernel/common
-        shell: bash
+      - name: Enable debug info
         run: |
-          set -euo pipefail
           scripts/config --file out/.config \
             -e DEBUG_INFO \
             -e DEBUG_INFO_DWARF4 \
@@ -152,40 +45,22 @@ jobs:
           make O=out ARCH=arm64 LLVM=1 olddefconfig
 
       - name: Build vmlinux
-        working-directory: kernel/common
-        shell: bash
         run: |
-          set -euo pipefail
           make O=out ARCH=arm64 LLVM=1 -j"$(nproc)" vmlinux
           test -s out/vmlinux
 
-      - name: Verify output
-        working-directory: kernel/common
-        shell: bash
+      - name: Verify
         run: |
-          set -euo pipefail
-          test -s out/vmlinux
           file out/vmlinux
-          ls -lh out/vmlinux out/.config out/System.map
+          ls -lh out/vmlinux out/System.map
 
-      - name: Upload vmlinux and config
+      - name: Upload vmlinux
         uses: actions/upload-artifact@v4
         with:
-          name: vmlinux-main-analysis
+          name: vmlinux-main
           path: |
-            kernel/common/out/vmlinux
-            kernel/common/out/.config
-            kernel/common/out/System.map
+            out/vmlinux
+            out/System.map
+            out/.config
           if-no-files-found: error
           retention-days: 14
-
-      - name: Upload configuration for debugging on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: vmlinux-build-debug
-          path: |
-            kernel/common/out/.config
-            kernel/common/out/include/config/auto.conf
-          if-no-files-found: ignore
-          retention-days: 7
