@@ -1,0 +1,29 @@
+name: Build Kernel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          repository: DiskDVD/android_kernel_common_realme_sm6650
+          ref: main
+
+      - name: Build kernel with dabao1955 action
+        uses: dabao1955/kernel_build_action@main
+        with:
+          kernel-url: https://github.com/DiskDVD/android_kernel_common_realme_sm6650
+          kernel-branch: main
+          config: gki_defconfig
+          arch: arm64
+          aosp-gcc: true
+          aosp-clang: true
+          ksu: false
+          ksu-version: main
+          disable-lto: true
+          anykernel3: false
+          release: true
