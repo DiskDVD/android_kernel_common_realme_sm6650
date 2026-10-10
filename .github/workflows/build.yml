@@ -18,53 +18,119 @@ jobs:
       - name: Checkout kernel
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 1
 
       - name: Free runner disk space
+        shell: bash
         run: |
+          set -euo pipefail
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
           df -h /
 
       - name: Install build dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             bc bison build-essential flex gawk git make pahole python3 rsync \
             cpio file clang llvm lld \
-            libelf-dev libncurses-dev libssl-dev zlib1g-dev liblz4-tool libzstd-dev
+            libelf-dev libncurses-dev libssl-dev zlib1g-dev \
+            liblz4-tool libzstd-dev
 
-      - name: Handle missing Oplus scheduler source
+      - name: Disable dangling optional Oplus Kconfig references
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! -f kernel/oplus_cpu/sched/Kconfig ]]; then
-            echo "::warning::kernel/oplus_cpu is a dangling symlink to missing vendor/oplus/kernel/cpu; building analysis vmlinux without the Oplus scheduler component."
-            sed -i '/^[[:space:]]*source[[:space:]]*"kernel\/oplus_cpu\/sched\/Kconfig"[[:space:]]*$/d' init/Kconfig
-          fi
-          if grep -Eq '^[[:space:]]*source[[:space:]]*"kernel/oplus_cpu/sched/Kconfig"[[:space:]]*$' init/Kconfig; then
-            echo "::error::Missing Oplus Kconfig reference is still present in init/Kconfig"
-            exit 1
-          fi
-          test -f init/Kconfig
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          tracked = subprocess.check_output(
+              ["git", "ls-files", "-z"]
+          ).decode().split("\0")
+
+          source_re = re.compile(
+              r'^(\s*)source\s+"([^"$]+)"\s*(?:#.*)?$'
+          )
+          missing = []
+
+          for name in tracked:
+              if not name or os.path.basename(name) != "Kconfig":
+                  continue
+              if not os.path.isfile(name):
+                  continue
+
+              with open(name, "r", encoding="utf-8") as f:
+                  lines = f.readlines()
+
+              changed = False
+              for index, line in enumerate(lines):
+                  match = source_re.match(line.rstrip("\n"))
+                  if not match:
+                      continue
+
+                  target = match.group(2)
+
+                  # Disable only absent Oplus Kconfig references.
+                  if "oplus" not in target.lower():
+                      continue
+                  if os.path.exists(target):
+                      continue
+
+                  missing.append(f"{name}:{index + 1} -> {target}")
+                  lines[index] = (
+                      match.group(1)
+                      + "# Disabled for analysis build: missing optional Oplus Kconfig: "
+                      + target
+                      + "\n"
+                  )
+                  changed = True
+
+              if changed:
+                  with open(name, "w", encoding="utf-8") as f:
+                      f.writelines(lines)
+
+          if missing:
+              print("Disabled absent Oplus Kconfig references:")
+              for entry in missing:
+                  print(f"  {entry}")
+              print(
+                  "Continuing with an analysis build without "
+                  "those missing vendor components."
+              )
+          else:
+              print("No missing Oplus source Kconfig references found.")
+          PY
 
       - name: Configure kernel
-        run: make O=out ARCH=arm64 LLVM=1 gki_defconfig
+        shell: bash
+        run: |
+          set -euo pipefail
+          make O=out ARCH=arm64 LLVM=1 gki_defconfig
 
-      - name: Enable debug symbols
+      - name: Enable debug information
         shell: bash
         run: |
           set -euo pipefail
           scripts/config --file out/.config \
-            -d OPLUS_SCHED_TUNE \
             -e DEBUG_INFO \
             -e DEBUG_INFO_DWARF4 \
             -d DEBUG_INFO_DWARF5
+
           make O=out ARCH=arm64 LLVM=1 olddefconfig
 
       - name: Build vmlinux
-        run: make O=out ARCH=arm64 LLVM=1 -j"$(nproc)" vmlinux
+        shell: bash
+        run: |
+          set -euo pipefail
+          make O=out ARCH=arm64 LLVM=1 -j"$(nproc)" vmlinux
+          test -s out/vmlinux
 
       - name: Verify output
+        shell: bash
         run: |
           set -euo pipefail
           test -s out/vmlinux
@@ -81,3 +147,14 @@ jobs:
             out/System.map
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload configuration for debugging on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmlinux-build-debug
+          path: |
+            out/.config
+            out/include/config/auto.conf
+          if-no-files-found: ignore
+          retention-days: 7
